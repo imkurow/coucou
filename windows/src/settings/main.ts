@@ -262,6 +262,8 @@ interface IntegrationDef {
   color: string;
   /** Credential Manager keys, in the order they are shown. */
   fields: { key: string; label: string; placeholder: string; secret: boolean }[];
+  /** Shown in place of the key fields when there are none. */
+  note?: string;
 }
 
 const INTEGRATIONS: IntegrationDef[] = [
@@ -282,6 +284,8 @@ const INTEGRATIONS: IntegrationDef[] = [
     fields: [{ key: "notion-api-key", label: "Integration token", placeholder: "ntn_…", secret: true }] },
   { id: "integration_calcom", name: "Cal.com", color: "#C9956A",
     fields: [{ key: "calcom-api-key", label: "API key", placeholder: "cal_…", secret: true }] },
+  { id: "integration_applemusic", name: "Apple Music", color: "#FA2D48", fields: [],
+    note: "No key needed. Shows what the Apple Music app is playing, with prev / play / next." },
 ];
 
 const MAX_ACTIVE = 4;
@@ -312,6 +316,7 @@ function integrationsSection(present: Record<string, boolean>): HTMLElement {
     });
 
     const rows = h("div", { style: "display:flex;flex-direction:column;gap:6px;flex:1 1 auto;min-width:0" });
+    if (def.note) rows.append(h("div", { class: "hint", style: "padding-top:4px", text: def.note }));
     for (const field of def.fields) {
       const input = h("input", {
         type: field.secret ? "password" : "text",

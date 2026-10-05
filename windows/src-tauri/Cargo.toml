@@ -24,7 +24,12 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
+base64 = "0.22"
 windows = { version = "0.61", features = [
+  "Foundation",
+  "Media_Control",
+  "Storage_Streams",
+  "Win32_System_WinRT",
   "Win32_Foundation",
   "Win32_Security",
   "Win32_Security_Authorization",

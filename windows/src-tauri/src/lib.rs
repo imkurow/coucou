@@ -6,6 +6,20 @@ mod hooks;
 mod integrations;
 mod island;
 mod log;
+#[cfg(windows)]
+mod media;
+// Apple Music's transport controls come from the Windows SMTC; nothing to listen
+// to elsewhere, so the same calls do nothing there.
+#[cfg(not(windows))]
+mod media {
+    use tauri::AppHandle;
+
+    pub fn start(_app: AppHandle) {}
+    pub fn refresh(_app: &AppHandle) {}
+    pub fn control(_action: &str) -> Result<(), String> {
+        Err("Media controls are only available on Windows".into())
+    }
+}
 mod pipe;
 mod platform;
 mod secrets;
@@ -61,13 +75,18 @@ fn boot(app: AppHandle, shared: State<Shared>) -> BootInfo {
 
 #[tauri::command]
 fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) {
-    let (screen_changed, autostart_changed) = {
+    let (screen_changed, autostart_changed, pills_changed) = {
         let mut current = shared.settings.lock().unwrap();
         let screen_changed = current.screen != settings.screen;
         let autostart_changed = current.autostart != settings.autostart;
+        let pills_changed = current.active_integrations != settings.active_integrations;
         *current = settings.clone();
-        (screen_changed, autostart_changed)
+        (screen_changed, autostart_changed, pills_changed)
     };
+    // Nothing is emitted while a pill is off; show the track as soon as it is on.
+    if pills_changed {
+        media::refresh(&app);
+    }
     if let Err(err) = settings::save(&settings) {
         eprintln!("[coucou] could not save settings: {err}");
     }
@@ -173,8 +192,18 @@ fn quit_app(app: AppHandle) {
 /// Tray → Pause. Paused means paused: the pollers stop talking to the network,
 /// not just the island stopping showing things.
 #[tauri::command]
-fn set_paused(paused: bool) {
+fn set_paused(app: AppHandle, paused: bool) {
     integrations::set_paused(paused);
+    // Nothing is emitted while paused; show the current track again on resume.
+    media::refresh(&app);
+}
+
+/// Apple Music transport buttons in the island: `prev`, `toggle`, `next`.
+#[tauri::command]
+async fn media_control(action: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || media::control(&action))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 // ── Claude Code hooks ─────────────────────────────────────────────────────────
@@ -401,6 +430,7 @@ pub fn run() {
             open_n8n,
             open_settings_window,
             set_paused,
+            media_control,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -426,6 +456,7 @@ pub fn run() {
             hooks::ensure_hook_exe(&handle);
             pipe::start(handle.clone());
             integrations::start(handle.clone());
+            media::start(handle.clone());
             Ok(())
         })
         .run(tauri::generate_context!())

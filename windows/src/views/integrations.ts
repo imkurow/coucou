@@ -54,6 +54,15 @@ const OPEN_URLS: Record<string, string> = {
 };
 
 function idleCard(task: AgentTask, openSettings: () => void): HTMLElement {
+  // No key, nothing to refresh: Apple Music either has a session or it doesn't.
+  if (task.id === "integration_applemusic") {
+    return h(
+      "div",
+      { class: "int-card" },
+      header(task.color, task.name, "Integration"),
+      h("div", { class: "int-status" }, dot("#8e939c", 5), h("span", { text: "Open Apple Music and play a song" })),
+    );
+  }
   const info = State.integrations[task.id];
   const configured = info?.configured ?? false;
   const error = info?.error ?? null;
@@ -229,6 +238,54 @@ function githubCard(): HTMLElement {
   );
 }
 
+// ── Apple Music ───────────────────────────────────────────────────────────────
+
+function musicCard(): HTMLElement {
+  const d = get("integration_applemusic");
+  const playing = d.playing === true;
+  const artwork = typeof d.artwork === "string" ? d.artwork : null;
+
+  const cover = h("div", { class: "music-cover" });
+  if (artwork) cover.append(h("img", { src: artwork, alt: "" }));
+  else cover.append(svg(ICONS.note, 20));
+
+  const button = (icon: string, label: string, action: "prev" | "toggle" | "next", main = false) =>
+    h(
+      "button",
+      {
+        class: main ? "music-btn main" : "music-btn",
+        title: label,
+        "aria-label": label,
+        onclick: () => void Bridge.mediaControl(action).catch((e) => void Bridge.log(`media ${action}: ${e}`)),
+      },
+      svg(icon, main ? 15 : 13),
+    );
+
+  return h(
+    "div",
+    { class: "int-card" },
+    header("#FA2D48", "Apple Music", playing ? "Now playing" : "Paused"),
+    h(
+      "div",
+      { class: "music-row" },
+      cover,
+      h(
+        "div",
+        { class: "music-text" },
+        h("span", { class: "music-title", text: String(d.title ?? "") }),
+        h("span", { class: "music-artist", text: String(d.artist ?? "") }),
+      ),
+      h(
+        "div",
+        { class: "music-ctl" },
+        button(ICONS.prev, "Previous", "prev"),
+        button(playing ? ICONS.pause : ICONS.play, playing ? "Pause" : "Play", "toggle", true),
+        button(ICONS.next, "Next", "next"),
+      ),
+    ),
+  );
+}
+
 // ── Stripe ────────────────────────────────────────────────────────────────────
 
 function stripeCard(): HTMLElement {
@@ -398,6 +455,8 @@ export function hasIntegrationData(id: string): boolean {
       return arr(id, "pages").length > 0;
     case "integration_calcom":
       return info.loaded;
+    case "integration_applemusic":
+      return get(id).hasSession === true && String(get(id).title ?? "") !== "";
     default:
       return false;
   }
@@ -426,6 +485,8 @@ export function renderIntegrationCard(task: AgentTask, hooks: IntegrationCardHoo
       return notionCard();
     case "integration_calcom":
       return calcomCard();
+    case "integration_applemusic":
+      return musicCard();
     default:
       return idleCard(task, hooks.openSettings);
   }

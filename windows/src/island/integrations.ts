@@ -20,9 +20,14 @@ const KEY_FOR: Record<string, string> = {
 
 const clearTimers = new Map<string, number>();
 
+const MUSIC_ID = "integration_applemusic";
+
 export function registerIntegrationHandlers(island: Island) {
   void onEvent<IntegrationUpdate>("integration", (update) => handle(island, update));
   void refreshConfigured();
+  // Rust emits the current track as soon as it starts, usually before this
+  // listener exists, so ask once more now that it does.
+  void Bridge.refreshIntegration(MUSIC_ID);
 }
 
 /** Asks Rust which keys exist so the idle cards can say so. */
@@ -40,8 +45,25 @@ export async function refreshConfigured() {
   State.notify();
 }
 
+/**
+ * Apple Music: a track change is not news. The pill shows whether something is
+ * playing and the card shows what, with no sound, badge, reveal or auto-clear.
+ */
+function handleMusic(update: IntegrationUpdate) {
+  State.integrations[update.id] = {
+    data: update.data,
+    error: update.error,
+    loaded: true,
+    configured: true,
+  };
+  const task = State.tasks.find((t) => t.id === update.id);
+  if (task) task.state = update.data.playing === true ? "working" : "idle";
+  State.notify();
+}
+
 function handle(island: Island, update: IntegrationUpdate) {
   if (State.paused) return;
+  if (update.id === MUSIC_ID) return handleMusic(update);
 
   const previous = State.integrations[update.id];
   State.integrations[update.id] = {
