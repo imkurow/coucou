@@ -259,6 +259,7 @@ export class Island {
   private setMode(mode: IslandMode) {
     const prev = State.mode;
     if (mode === prev) return;
+    if (UploadSeq.isActive) void Bridge.log(`upload: mode ${prev} -> ${mode} (view ${State.view})`);
     State.mode = mode;
     if (mode === "expanded") Sound.play("open");
     if (prev === "expanded") {
@@ -272,6 +273,12 @@ export class Island {
       // it running would keep the frame loop awake — the island must cost
       // nothing while hidden.
       UploadSeq.deactivate();
+      // With the sequence gone nothing would ever advance the upload view: reopening
+      // the island would show "Uploading… 0 %" for good.
+      if (UPLOAD_VIEWS.has(State.view)) {
+        void Bridge.log(`island closed during the drop flow (view ${State.view}); resetting the view`);
+        State.view = State.defaultView();
+      }
     }
     this.updateWindowCollapsed();
     this.animateGeometry(modeOrder(mode) < modeOrder(prev));
@@ -285,7 +292,10 @@ export class Island {
 
   /** Navigating out of the drop flow ends the sequence, as on macOS. */
   private stopSequenceIfLeaving(view: IslandViewName) {
-    if (UploadSeq.isActive && !UPLOAD_VIEWS.has(view)) UploadSeq.deactivate();
+    if (UploadSeq.isActive && !UPLOAD_VIEWS.has(view)) {
+      void Bridge.log(`upload: sequence stopped, leaving for view ${view}`);
+      UploadSeq.deactivate();
+    }
   }
 
   expand(view: IslandViewName) {
@@ -298,17 +308,32 @@ export class Island {
     State.notify();
   }
 
+  /**
+   * The island must not close under work in flight: an alert waiting for an
+   * answer, and the drop sequence while it runs. When the sequence hands over to
+   * the choose card the pin lifts and the usual auto-close takes over.
+   */
+  private syncPin() {
+    this.fsm.pinned = State.isPinned || State.view === "uploading";
+    if (!this.fsm.pinned && State.view === "choose" && !this.wasInIsland) this.fsm.mouseLeft();
+  }
+
   setView(view: IslandViewName) {
+    if (UPLOAD_VIEWS.has(view) || UPLOAD_VIEWS.has(State.view)) {
+      void Bridge.log(`upload: view ${State.view} -> ${view} (mode ${State.mode}, seqActive ${UploadSeq.isActive})`);
+    }
     this.stopSequenceIfLeaving(view);
     if (State.mode !== "expanded") {
       this.fsm.forceHome();
       State.view = view;
+      this.syncPin();
       this.animateGeometry(false);
       State.notify();
       return;
     }
     const grew = VIEW_LAYOUTS[view].height >= VIEW_LAYOUTS[State.view].height;
     State.view = view;
+    this.syncPin();
     State.lastActivity = performance.now();
     this.animateGeometry(!grew);
     State.notify();
@@ -340,6 +365,51 @@ export class Island {
   }
 
   // ── File drop ───────────────────────────────────────────────────────────────
+
+  /** Set while the drop view was opened by a drag seen before it reached the island. */
+  private preDragged = false;
+  private lastSeqLog = 0;
+  private dragEndTimer: number | null = null;
+
+  /**
+   * Rust saw a file drag start or end anywhere on screen. Open the drop view at
+   * once so the drop zone is already there when the file arrives, and close it
+   * again if the file ends up somewhere else.
+   */
+  onFileDrag(active: boolean) {
+    if (this.dragEndTimer != null) {
+      window.clearTimeout(this.dragEndTimer);
+      this.dragEndTimer = null;
+    }
+    if (State.paused) return;
+
+    if (active) {
+      // Never take over an alert waiting for an answer, or a drop already in flight.
+      if (State.isPinned || UploadSeq.dropped || State.view === "uploading" || State.view === "choose") return;
+      this.preDragged = true;
+      this.onDragDrop({ type: "enter" });
+      // Hold the island open for the whole drag: the auto-close timer would
+      // otherwise shut it while the file is still on its way.
+      this.fsm.cancelTimers();
+      this.fsm.pinned = true;
+      return;
+    }
+
+    if (!this.preDragged) return;
+    this.preDragged = false;
+    // The drop event can arrive before or after this one: never unpin the upload.
+    this.syncPin();
+    // A drop moves the island on to "uploading" within a frame or two; give the
+    // drop event that long before deciding the file went somewhere else.
+    this.dragEndTimer = window.setTimeout(() => {
+      this.dragEndTimer = null;
+      if (State.view !== "upload" || UploadSeq.dropped) return;
+      State.fileDragOver = false;
+      this.engine.animateMorph(0);
+      UploadSeq.deactivate();
+      this.collapse();
+    }, 400);
+  }
 
   private onDragDrop(e: { type: string; paths?: string[] }) {
     if (e.type !== "over") void Bridge.log(`drag ${e.type} ${e.paths?.length ?? 0} file(s)`);
@@ -385,6 +455,7 @@ export class Island {
    * slow disk can never stall the animation — same as FileDropHandler on macOS.
    */
   private swallow(path: string) {
+    void Bridge.log(`upload: swallow mode=${State.mode} view=${State.view} seqActive=${UploadSeq.isActive}`);
     const name = path.split(/[\\/]/).pop() || "file";
     State.droppedFile = { name, path };
     State.promptContext = { kind: "file", name, path };
@@ -427,6 +498,13 @@ export class Island {
   private stepSequence() {
     const since = UploadSeq.sinceDrop();
     if (since == null) return;
+    const nowLog = performance.now();
+    if (nowLog - this.lastSeqLog > 500) {
+      this.lastSeqLog = nowLog;
+      void Bridge.log(
+        `upload: since=${since.toFixed(1)}s mode=${State.mode} view=${State.view} pinned=${this.fsm.pinned} active=${this.uploadActive}`,
+      );
+    }
     const dur = State.uploadDuration;
     const p = Math.max(0, Math.min(1, (since - PRE_PROGRESS) / dur));
 

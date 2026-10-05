@@ -12,7 +12,7 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewWindow};
 
-use crate::platform::{self, cursor_physical, left_button_down};
+use crate::platform::{self, cursor_physical, drag_image_present, left_button_down};
 
 /// Logical size of the full window — the largest island view, like the macOS panel.
 pub const PANEL_W: f64 = 720.0;
@@ -195,6 +195,7 @@ fn current_screen_key(app: &AppHandle) -> Option<(i32, i32, u32, u32, u64)> {
 pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
     std::thread::spawn(move || {
         let mut was_down = false;
+        let mut was_dragging = false;
         // Remembered across wakes so a display change while hidden is noticed the
         // moment the island comes back.
         let mut last_screen: Option<(i32, i32, u32, u32, u64)> = None;
@@ -224,6 +225,19 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
                             let _ = app.emit_to(WINDOW_LABEL, "screen-changed", ());
                         }
                     }
+                }
+
+                // Before the "cursor hasn't moved" skip below: a drag can end with
+                // the cursor perfectly still, and that edge must not be missed.
+                // The drag image goes away while the cursor is over a window that
+                // won't take the drop, including ours, so once a drag has started
+                // only the button release ends it.
+                let button = left_button_down();
+                let dragging_file = if was_dragging { button } else { button && drag_image_present() };
+                if dragging_file != was_dragging {
+                    was_dragging = dragging_file;
+                    crate::log::line(format!("file drag {}", if dragging_file { "started" } else { "ended" }));
+                    let _ = app.emit_to(WINDOW_LABEL, "file-drag", dragging_file);
                 }
 
                 let Some(win) = window(&app) else { continue };

@@ -1,6 +1,8 @@
 // Coucou for Windows — app wiring and the commands the island calls.
 
 mod claude;
+#[cfg(windows)]
+mod dropzone;
 mod files;
 mod hooks;
 mod integrations;
@@ -374,6 +376,22 @@ pub fn run() {
         })
         .manage(Pending::default())
         .manage(Chat::default())
+        // The OS-level view of a file drag, logged next to the island's own
+        // "ui drag …" lines: when only one of the two appears, the break is
+        // between them rather than at the drop target.
+        .on_webview_event(|webview, event| {
+            if let tauri::WebviewEvent::DragDrop(drag) = event {
+                use tauri::DragDropEvent as D;
+                let what = match drag {
+                    D::Enter { paths, .. } => format!("enter {} file(s)", paths.len()),
+                    D::Over { .. } => return,
+                    D::Drop { paths, .. } => format!("drop {} file(s)", paths.len()),
+                    D::Leave => "leave".to_string(),
+                    _ => return,
+                };
+                log::line(format!("native drag {what} on {}", webview.label()));
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             boot,
             save_settings,
@@ -426,6 +444,16 @@ pub fn run() {
             hooks::ensure_hook_exe(&handle);
             pipe::start(handle.clone());
             integrations::start(handle.clone());
+
+            // WebView2 builds its windows a little after the webview exists;
+            // give them time, then put the island's own drop target in place. The
+            // cursor poll repeats this at every button press.
+            let drops = handle.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                let inner = drops.clone();
+                let _ = drops.run_on_main_thread(move || platform::unblock_webview_drops(&inner));
+            });
             Ok(())
         })
         .run(tauri::generate_context!())

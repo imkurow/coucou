@@ -4,7 +4,6 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { Settings } from "./state";
 
 export const IS_TAURI =
@@ -150,12 +149,13 @@ export interface DragDropPayload {
   paths?: string[];
 }
 
-/** Files dragged onto the island. Only reaches us when the window takes the mouse. */
+/**
+ * Files dragged onto the island, from Coucou's own drop target (dropzone.rs).
+ * Tauri's `onDragDropEvent` is not used: its target never answered on Windows.
+ */
 export async function onDragDrop(handler: (e: DragDropPayload) => void) {
   if (!IS_TAURI) return () => {};
-  return getCurrentWebview().onDragDropEvent((event) => {
-    handler(event.payload as DragDropPayload);
-  });
+  return onEvent<DragDropPayload>("file-drop", handler);
 }
 
 export async function onEvent<T>(name: string, handler: (payload: T) => void) {

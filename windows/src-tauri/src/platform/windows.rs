@@ -6,7 +6,7 @@ use std::process::Command;
 
 use tauri::{AppHandle, Manager, WebviewWindow};
 
-use ::windows::core::{BOOL, PWSTR};
+use ::windows::core::{w, BOOL, PCWSTR, PWSTR};
 use ::windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, HWND, LPARAM, LocalFree, POINT};
 use ::windows::Win32::Security::Authorization::ConvertSidToStringSidW;
 use ::windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
@@ -15,8 +15,8 @@ use ::windows::Win32::System::SystemInformation::GetLocalTime;
 use ::windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use ::windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
 use ::windows::Win32::UI::WindowsAndMessaging::{
-    EnumChildWindows, GetClassNameW, GetCursorPos, GetWindowLongPtrW, SetWindowLongPtrW,
-    GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    EnumChildWindows, FindWindowW, GetClassNameW, GetCursorPos, GetWindowLongPtrW,
+    SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
 };
 
 use super::LocalTime;
@@ -163,6 +163,14 @@ pub fn left_button_down() -> bool {
     unsafe { (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000) != 0 }
 }
 
+/// True while the shell is showing a drag image — the translucent icon that
+/// follows the cursor when a file is being dragged. Combined with the button
+/// state it tells us a drag is under way anywhere on screen, long before the file
+/// reaches the island window (which only hears about it once it is over it).
+pub fn drag_image_present() -> bool {
+    unsafe { FindWindowW(w!("SysDragImage"), PCWSTR::null()).is_ok() }
+}
+
 // ── Island window ─────────────────────────────────────────────────────────────
 
 fn hwnd_of(win: &WebviewWindow) -> Option<HWND> {
@@ -192,6 +200,31 @@ pub fn unblock_webview_drops(app: &AppHandle) {
             let _ = EnumChildWindows(Some(hwnd), Some(revoke_render_widget), LPARAM(0));
         }
     }
+
+    // The island gets its own drop target on its top-level window and on every
+    // window inside it, replacing wry's, which stayed silent here. Innermost
+    // windows included: the ones under the cursor belong to the WebView2 browser
+    // process, and a drag does not look past that process boundary for a parent's
+    // target. See dropzone.rs.
+    if let Some(win) = app.get_webview_window(WINDOW_LABEL) {
+        if let Some(top) = hwnd_of(&win) {
+            let mut found: Vec<HWND> = vec![top];
+            unsafe {
+                let _ = EnumChildWindows(
+                    Some(top),
+                    Some(collect_drop_targets),
+                    LPARAM(&mut found as *mut Vec<HWND> as isize),
+                );
+            }
+            crate::dropzone::install(app, &found);
+        }
+    }
+}
+
+unsafe extern "system" fn collect_drop_targets(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let found = unsafe { &mut *(lparam.0 as *mut Vec<HWND>) };
+    found.push(hwnd);
+    true.into()
 }
 
 unsafe extern "system" fn revoke_render_widget(hwnd: HWND, _: LPARAM) -> BOOL {

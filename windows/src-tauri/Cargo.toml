@@ -24,8 +24,14 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
+# The `implement` macro expands to paths under `windows_core`.
+windows-core = "0.61"
 windows = { version = "0.61", features = [
   "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_System_DataExchange",
+  "Win32_System_SystemServices",
+  "Win32_UI_Shell",
   "Win32_Security",
   "Win32_Security_Authorization",
   "Win32_System_Ole",
